@@ -12,6 +12,7 @@
 //	BANK2_TOKEN   — токен API «Банка 2» (обязателен)
 //	BANK1_URL     — базовый URL «Банка 1» (по умолчанию http://bank.example.com)
 //	BANK2_URL     — базовый URL «Банка 2» (по умолчанию http://bank2.example.com)
+//	HTTP_TIMEOUT  — таймаут запроса к банку в формате time.Duration (по умолчанию 10s)
 package main
 
 import (
@@ -53,6 +54,7 @@ Environment:
   BANK2_TOKEN   Bank 2 API token (required)
   BANK1_URL     Bank 1 base URL (default http://bank.example.com)
   BANK2_URL     Bank 2 base URL (default http://bank2.example.com)
+  HTTP_TIMEOUT  per-request timeout for bank APIs (default 10s)
 `
 
 // errUsage означает неверный вызов: справка уже выведена, нужен код выхода 2.
@@ -136,7 +138,11 @@ type config struct {
 	bank1URL    string
 	bank2URL    string
 	bank2Token  string
+	httpTimeout time.Duration
 }
+
+// defaultHTTPTimeout — таймаут запроса к банку, если HTTP_TIMEOUT не задан.
+const defaultHTTPTimeout = 10 * time.Second
 
 func loadConfig() (config, error) {
 	cfg := config{
@@ -144,9 +150,21 @@ func loadConfig() (config, error) {
 		bank1URL:    envOr("BANK1_URL", "http://bank.example.com"),
 		bank2URL:    envOr("BANK2_URL", "http://bank2.example.com"),
 		bank2Token:  os.Getenv("BANK2_TOKEN"),
+		httpTimeout: defaultHTTPTimeout,
 	}
 
 	var errs []error
+	if v := os.Getenv("HTTP_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("HTTP_TIMEOUT: %w", err))
+		case d <= 0:
+			errs = append(errs, fmt.Errorf("HTTP_TIMEOUT must be positive, got %s", d))
+		default:
+			cfg.httpTimeout = d
+		}
+	}
 	if cfg.databaseURL == "" {
 		errs = append(errs, errors.New("DATABASE_URL is required"))
 	}
@@ -195,7 +213,7 @@ func withUpdater(ctx context.Context, stderr io.Writer, fn func(*updater.Updater
 	}()
 
 	// Без таймаута http.Client может ждать зависший банк бесконечно.
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: cfg.httpTimeout}
 
 	providers := []rates.Provider{
 		bank1.New(client, cfg.bank1URL),
